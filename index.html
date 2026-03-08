@@ -550,6 +550,9 @@
 
   <div class="confettiLayer" id="confettiLayer" aria-hidden="true"></div>
 
+  <audio id="correctSfx" preload="auto" src="./correct.mp3"></audio>
+  <audio id="wrongSfx" preload="auto" src="./wrong.mp3"></audio>
+
   <div class="startOverlay" id="startOverlay" aria-hidden="false">
     <div class="startPanel">
       <div class="startTitle">Fact Family Streak</div>
@@ -581,23 +584,8 @@
     const partANode = document.getElementById('partANode');
     const partBNode = document.getElementById('partBNode');
     const confettiLayer = document.getElementById('confettiLayer');
-
-    const correctAudio = new Audio('./correct.mp3');
-    const wrongAudio = new Audio('./wrong.mp3');
-    correctAudio.preload = 'auto';
-    wrongAudio.preload = 'auto';
-
-    let audioReady = false;
-    let audioLock = false;
-    let currentIndex = 0;
-    let streak = 0;
-    let bestStreak = 0;
-    let round = 1;
-    let family = null;
-    let selectedVoice = null;
-
-    function chooseVoice(){
-      const voices = speechSynthesis.getVoices() || [];
+    const correctAudio = document.getElementById('correctSfx');
+    const wrongAudio = document.getElementById('wrongSfx');const voices = speechSynthesis.getVoices() || [];
       if (!voices.length) return null;
       const exactFemale = voices.find(v => /en-GB/i.test(v.lang) && /female|woman|uk english female/i.test(v.name));
       const anyGB = voices.find(v => /en-GB/i.test(v.lang));
@@ -770,81 +758,46 @@
         audioEl.currentTime = 0;
         const playPromise = audioEl.play();
         if (playPromise && typeof playPromise.then === 'function') {
-          await playPromise;
-        }
-        await new Promise(resolve => {
-          let done = false;
+         async function playSfx(audioEl, fallback){
+      try{
+        audioEl.pause();
+        audioEl.currentTime = 0;
+        await new Promise(async resolve => {
+          let settled = false;
           const finish = () => {
-            if (done) return;
-            done = true;
+            if (settled) return;
+            settled = true;
             audioEl.removeEventListener('ended', finish);
             audioEl.removeEventListener('error', fail);
             resolve();
           };
           const fail = async () => {
+            if (settled) return;
+            settled = true;
             audioEl.removeEventListener('ended', finish);
             audioEl.removeEventListener('error', fail);
             if (fallback) await fallback();
             resolve();
           };
-          audioEl.addEventListener('ended', finish, { once:true });
-          audioEl.addEventListener('error', fail, { once:true });
-          setTimeout(finish, Math.max(700, ((audioEl.duration || 0) * 1000) + 120));
+          audioEl.addEventListener('ended', finish);
+          audioEl.addEventListener('error', fail);
+          try{
+            await audioEl.play();
+          }catch(err){
+            await fail();
+            return;
+          }
+          const ms = Number.isFinite(audioEl.duration) && audioEl.duration > 0
+            ? Math.ceil(audioEl.duration * 1000) + 150
+            : 1200;
+          setTimeout(finish, ms);
         });
       }catch(err){
         if (fallback) await fallback();
       }
     }
 
-    async function correctSound(){
-      await playSfx(correctAudio, async () => {
-        playTone(660, .18, 'triangle', 0);
-        playTone(880, .22, 'triangle', .16);
-        await wait(430);
-      });
-    }
-
-    async function wrongSound(){
-      await playSfx(wrongAudio, async () => {
-        playTone(360, .22, 'sawtooth', 0);
-        playTone(240, .3, 'sawtooth', .16);
-        await wait(520);
-      });
-    }
-
-    function speak(text){
-      return new Promise(resolve => {
-        if (!audioReady || !('speechSynthesis' in window)) return resolve();
-        speechSynthesis.cancel();
-        chooseVoice();
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = (selectedVoice && selectedVoice.lang) || 'en-GB';
-        utter.rate = 0.84;
-        utter.pitch = 1.02;
-        utter.volume = 1;
-        if (selectedVoice) utter.voice = selectedVoice;
-        utter.onend = () => resolve();
-        utter.onerror = () => resolve();
-        speechSynthesis.speak(utter);
-      });
-    }
-
-    async function runAudio(task){
-      if (audioLock) return;
-      audioLock = true;
-      disableInteractive(true);
-      try{
-        await task();
-      }finally{
-        audioLock = false;
-        disableInteractive(false);
-        focusActive();
-      }
-    }
-
-    async function readCurrentPrompt(){
-      await runAudio(async () => {
-        setFeedback(phrases[currentIndex], 'info');
+    async function correctSound(){'info');
         await speak(phrases[currentIndex]);
       });
     }
