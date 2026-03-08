@@ -20,7 +20,6 @@
       --gold:#ffb938;
       --purple:#8f67ff;
       --shadow:0 18px 40px rgba(22,50,79,.12);
-      --radius:24px;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -110,6 +109,7 @@
       flex-direction:column;
       gap:10px;
       align-items:stretch;
+      justify-content:center;
     }
     .soundStatus{
       font-size:.92rem;
@@ -435,6 +435,7 @@
       border-radius:22px;
       min-width:min(360px,100%);
     }
+
     .confettiPiece{
       position:absolute;
       top:-40px;
@@ -539,7 +540,7 @@
             <div class="controls">
               <button id="replayBtn" class="secondaryBtn">🔁 Read Phrase Again</button>
             </div>
-            <div id="feedback" class="feedback info">Press <strong style="margin-left:4px">Start the Fact Family Game!<\/strong><span style="margin-left:4px">to begin.<\/span></div>
+            <div id="feedback" class="feedback info">Press <strong style="margin-left:4px">Start the Fact Family Game!</strong><span style="margin-left:4px">to begin.</span></div>
           </section>
         </div>
       </section>
@@ -550,8 +551,8 @@
 
   <div class="confettiLayer" id="confettiLayer" aria-hidden="true"></div>
 
-  <audio id="correctSfx" preload="auto" src="./correct.mp3"></audio>
-  <audio id="wrongSfx" preload="auto" src="./wrong.mp3"></audio>
+  <audio id="correctSfx" preload="auto" playsinline src="./correct.mp3"></audio>
+  <audio id="wrongSfx" preload="auto" playsinline src="./wrong.mp3"></audio>
 
   <div class="startOverlay" id="startOverlay" aria-hidden="false">
     <div class="startPanel">
@@ -585,7 +586,21 @@
     const partBNode = document.getElementById('partBNode');
     const confettiLayer = document.getElementById('confettiLayer');
     const correctAudio = document.getElementById('correctSfx');
-    const wrongAudio = document.getElementById('wrongSfx');const voices = speechSynthesis.getVoices() || [];
+    const wrongAudio = document.getElementById('wrongSfx');
+
+    let audioReady = false;
+    let audioLock = false;
+    let currentIndex = 0;
+    let streak = 0;
+    let bestStreak = 0;
+    let round = 1;
+    let family = null;
+    let selectedVoice = null;
+    let roundComplete = false;
+
+    function chooseVoice(){
+      if (!('speechSynthesis' in window)) return null;
+      const voices = speechSynthesis.getVoices() || [];
       if (!voices.length) return null;
       const exactFemale = voices.find(v => /en-GB/i.test(v.lang) && /female|woman|uk english female/i.test(v.name));
       const anyGB = voices.find(v => /en-GB/i.test(v.lang));
@@ -595,7 +610,7 @@
     }
 
     chooseVoice();
-    if ('onvoiceschanged' in speechSynthesis){
+    if ('speechSynthesis' in window && 'onvoiceschanged' in speechSynthesis){
       speechSynthesis.onvoiceschanged = () => chooseVoice();
     }
 
@@ -616,7 +631,15 @@
         a = 1 + Math.floor(Math.random() * 9);
         b = 1 + Math.floor(Math.random() * (10 - a));
       }while(a + b > 10 || a === b);
-      return { a, b, whole: a + b };
+      return {
+        a,
+        b,
+        whole: a + b,
+        solvedAdd0: null,
+        solvedAdd1: null,
+        solvedSub0: null,
+        solvedSub1: null
+      };
     }
 
     function updateBond(){
@@ -631,10 +654,16 @@
         const item = document.createElement('div');
         item.className = 'chantItem';
         if (i < currentIndex) item.classList.add('done');
-        if (i === currentIndex) item.classList.add('active');
+        if (!roundComplete && i === currentIndex) item.classList.add('active');
+        if (roundComplete) item.classList.add('done');
         item.textContent = phrase;
         chantListEl.appendChild(item);
       });
+    }
+
+    function getSolvedEquation(index){
+      const key = index < 2 ? `solvedAdd${index}` : `solvedSub${index - 2}`;
+      return family[key] || [0,0,0];
     }
 
     function equationMarkup(index, state){
@@ -667,22 +696,30 @@
       `;
     }
 
-    function getSolvedEquation(index){
-      const key = index < 2 ? `solvedAdd${index}` : `solvedSub${index - 2}`;
-      return family[key] || [0,0,0];
-    }
-
     function renderRows(){
       rowsEl.innerHTML = '';
+
       phrases.forEach((phrase, i) => {
-        const state = i < currentIndex ? 'done' : (i === currentIndex ? 'active' : 'locked');
+        let state = 'locked';
+        if (roundComplete) {
+          state = 'done';
+        } else if (i < currentIndex) {
+          state = 'done';
+        } else if (i === currentIndex) {
+          state = 'active';
+        }
+
         const row = document.createElement('div');
         row.className = `row ${state}`;
         row.innerHTML = `
           <div class="phrase">${phrase}</div>
           <div class="equation">${equationMarkup(i, state)}</div>
-          ${state === 'active' ? '<button class="primaryBtn rowCheckBtn" data-check-index="'+ i +'">Check</button>' : '<div class="rowSpacer" aria-hidden="true"></div>'}
-          ${state === 'done' ? '<div class="tick">✓</div>' : '<button class="speakerBtn" data-speak-index="'+ i +'">🔊</button>'}
+          ${state === 'active'
+            ? '<button class="primaryBtn rowCheckBtn" data-check-index="'+ i +'">Check</button>'
+            : '<div class="rowSpacer" aria-hidden="true"></div>'}
+          ${state === 'done'
+            ? '<div class="tick">✓</div>'
+            : '<button class="speakerBtn" data-speak-index="'+ i +'">🔊</button>'}
         `;
         rowsEl.appendChild(row);
       });
@@ -699,7 +736,9 @@
       document.querySelectorAll('.speakerBtn').forEach(btn => {
         btn.addEventListener('click', async () => {
           const i = Number(btn.dataset.speakIndex);
-          await runAudio(async () => { await speak(phrases[i]); });
+          await runAudio(async () => {
+            await speak(phrases[i]);
+          });
         });
       });
 
@@ -721,8 +760,8 @@
     }
 
     function disableInteractive(disabled){
-      replayBtn.disabled = disabled || !audioReady;
-      newFamilyBtn.disabled = disabled;
+      replayBtn.disabled = disabled || !audioReady || roundComplete;
+      newFamilyBtn.disabled = disabled || !audioReady;
       currentInputs().forEach(inp => inp.disabled = disabled);
       document.querySelectorAll('.rowCheckBtn').forEach(btn => {
         btn.disabled = disabled || !audioReady;
@@ -752,18 +791,40 @@
       osc.stop(start + duration + 0.03);
     }
 
+    async function primeAudio(audioEl){
+      if (!audioEl) return;
+      try{
+        audioEl.volume = 1;
+        audioEl.muted = true;
+        audioEl.currentTime = 0;
+        const p = audioEl.play();
+        if (p && typeof p.then === 'function') await p.catch(() => {});
+        audioEl.pause();
+        audioEl.currentTime = 0;
+        audioEl.muted = false;
+      }catch(err){
+        try{
+          audioEl.muted = false;
+          audioEl.load();
+        }catch(e){}
+      }
+    }
+
     async function playSfx(audioEl, fallback){
+      if (!audioEl) {
+        if (fallback) await fallback();
+        return;
+      }
+
       try{
         audioEl.pause();
         audioEl.currentTime = 0;
-        const playPromise = audioEl.play();
-        if (playPromise && typeof playPromise.then === 'function') {
-         async function playSfx(audioEl, fallback){
-      try{
-        audioEl.pause();
-        audioEl.currentTime = 0;
+        audioEl.muted = false;
+        audioEl.volume = 1;
+
         await new Promise(async resolve => {
           let settled = false;
+
           const finish = () => {
             if (settled) return;
             settled = true;
@@ -771,6 +832,7 @@
             audioEl.removeEventListener('error', fail);
             resolve();
           };
+
           const fail = async () => {
             if (settled) return;
             settled = true;
@@ -779,17 +841,22 @@
             if (fallback) await fallback();
             resolve();
           };
+
           audioEl.addEventListener('ended', finish);
           audioEl.addEventListener('error', fail);
+
           try{
-            await audioEl.play();
+            const p = audioEl.play();
+            if (p && typeof p.then === 'function') await p;
           }catch(err){
             await fail();
             return;
           }
+
           const ms = Number.isFinite(audioEl.duration) && audioEl.duration > 0
             ? Math.ceil(audioEl.duration * 1000) + 150
             : 1200;
+
           setTimeout(finish, ms);
         });
       }catch(err){
@@ -797,7 +864,56 @@
       }
     }
 
-    async function correctSound(){'info');
+    async function correctSound(){
+      await playSfx(correctAudio, async () => {
+        playTone(660, .18, 'triangle', 0);
+        playTone(880, .22, 'triangle', .16);
+        await wait(430);
+      });
+    }
+
+    async function wrongSound(){
+      await playSfx(wrongAudio, async () => {
+        playTone(360, .22, 'sawtooth', 0);
+        playTone(240, .30, 'sawtooth', .16);
+        await wait(520);
+      });
+    }
+
+    function speak(text){
+      return new Promise(resolve => {
+        if (!audioReady || !('speechSynthesis' in window)) return resolve();
+        speechSynthesis.cancel();
+        chooseVoice();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = (selectedVoice && selectedVoice.lang) || 'en-GB';
+        utter.rate = 0.84;
+        utter.pitch = 1.02;
+        utter.volume = 1;
+        if (selectedVoice) utter.voice = selectedVoice;
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        speechSynthesis.speak(utter);
+      });
+    }
+
+    async function runAudio(task){
+      if (audioLock) return;
+      audioLock = true;
+      disableInteractive(true);
+      try{
+        await task();
+      }finally{
+        audioLock = false;
+        disableInteractive(false);
+        focusActive();
+      }
+    }
+
+    async function readCurrentPrompt(){
+      if (roundComplete || currentIndex >= phrases.length) return;
+      await runAudio(async () => {
+        setFeedback(phrases[currentIndex], 'info');
         await speak(phrases[currentIndex]);
       });
     }
@@ -810,12 +926,18 @@
 
     function isValidAddition(vals){
       const [x,y,z] = vals;
-      return z === family.whole && ((x === family.a && y === family.b) || (x === family.b && y === family.a));
+      return z === family.whole && (
+        (x === family.a && y === family.b) ||
+        (x === family.b && y === family.a)
+      );
     }
 
     function isValidSubtraction(vals){
       const [x,y,z] = vals;
-      return x === family.whole && ((y === family.a && z === family.b) || (y === family.b && z === family.a));
+      return x === family.whole && (
+        (y === family.a && z === family.b) ||
+        (y === family.b && z === family.a)
+      );
     }
 
     function storeSolved(index, vals){
@@ -844,15 +966,19 @@
     }
 
     async function handleCheck(){
-      if (!audioReady || audioLock) return;
+      if (!audioReady || audioLock || roundComplete) return;
+
       const vals = parseActiveValues();
       if (!vals){
         setFeedback('Please fill in all 3 boxes.', 'bad');
-        await runAudio(async () => { await speak('Please fill in all three boxes.'); });
+        await runAudio(async () => {
+          await speak('Please fill in all three boxes.');
+        });
         return;
       }
 
       let isCorrect = currentIndex < 2 ? isValidAddition(vals) : isValidSubtraction(vals);
+
       if (isCorrect){
         if (currentIndex === 1 && sameEquation(vals, family.solvedAdd0)) isCorrect = false;
         if (currentIndex === 3 && sameEquation(vals, family.solvedSub0)) isCorrect = false;
@@ -885,65 +1011,81 @@
 
       streak += 1;
       if (streak > bestStreak) bestStreak = streak;
+
+      roundComplete = true;
+      currentIndex = 4;
+      renderRows();
       updateScores();
-      setFeedback('Wonderful! You completed the fact family!', 'good');
+
+      setFeedback('Wonderful! Press New Fact Family when you are ready.', 'good');
       launchConfetti();
+
       await runAudio(async () => {
         await correctSound();
-        await speak('Wonderful! You completed the fact family.');
-        await wait(550);
+        await speak('Wonderful! Press New Fact Family when you are ready.');
       });
-      round += 1;
-      updateScores();
-      startRound(true);
+
+      disableInteractive(false);
     }
 
     function startRound(shouldRead = true){
+      roundComplete = false;
       family = randomFamily();
-      family.solvedAdd0 = null;
-      family.solvedAdd1 = null;
-      family.solvedSub0 = null;
-      family.solvedSub1 = null;
       updateBond();
       currentIndex = 0;
       renderRows();
       setFeedback('Listen to the phrase, then fill in the matching equation.', 'info');
+      disableInteractive(!audioReady);
       if (shouldRead && audioReady) readCurrentPrompt();
     }
 
     async function unlockAudio(){
       if (audioReady) return;
       audioReady = true;
+
       try{
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx){
           if (!window._factFamilyAudioCtx) window._factFamilyAudioCtx = new AudioCtx();
-          if (window._factFamilyAudioCtx.state === 'suspended') await window._factFamilyAudioCtx.resume();
+          if (window._factFamilyAudioCtx.state === 'suspended') {
+            await window._factFamilyAudioCtx.resume();
+          }
         }
       }catch(err){}
+
       chooseVoice();
+
       try{
         correctAudio.load();
         wrongAudio.load();
       }catch(err){}
+
+      await primeAudio(correctAudio);
+      await primeAudio(wrongAudio);
+
       soundStatus.textContent = 'Sound is on. The phrase will be read before each equation.';
       setFeedback('Sound is ready. Let us begin!', 'info');
       startOverlay.classList.add('hidden');
       startOverlay.setAttribute('aria-hidden','true');
+
+      disableInteractive(false);
       await readCurrentPrompt();
     }
 
     startBtn.addEventListener('click', unlockAudio);
+
     newFamilyBtn.addEventListener('click', async () => {
-      if (audioLock) return;
+      if (audioLock || !audioReady) return;
       round += 1;
       updateScores();
-      startRound(audioReady);
+      startRound(true);
     });
+
     replayBtn.addEventListener('click', async () => {
-      if (!audioReady || audioLock) return;
+      if (!audioReady || audioLock || roundComplete) return;
       await readCurrentPrompt();
     });
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && document.activeElement && document.activeElement.classList.contains('eqBox')){
         e.preventDefault();
