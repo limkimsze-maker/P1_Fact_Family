@@ -550,8 +550,8 @@
 
   <div class="confettiLayer" id="confettiLayer" aria-hidden="true"></div>
 
-  <audio id="correctSfx" preload="auto" src="./correct.mp3"></audio>
-  <audio id="wrongSfx" preload="auto" src="./wrong.mp3"></audio>
+  <audio id="correctSfx" preload="auto" playsinline src="./correct.mp3"></audio>
+  <audio id="wrongSfx" preload="auto" playsinline src="./wrong.mp3"></audio>
 
   <div class="startOverlay" id="startOverlay" aria-hidden="false">
     <div class="startPanel">
@@ -585,7 +585,19 @@
     const partBNode = document.getElementById('partBNode');
     const confettiLayer = document.getElementById('confettiLayer');
     const correctAudio = document.getElementById('correctSfx');
-    const wrongAudio = document.getElementById('wrongSfx');const voices = speechSynthesis.getVoices() || [];
+    const wrongAudio = document.getElementById('wrongSfx');
+
+    let audioReady = false;
+    let audioLock = false;
+    let currentIndex = 0;
+    let streak = 0;
+    let bestStreak = 0;
+    let round = 1;
+    let family = null;
+    let selectedVoice = null;
+
+    function chooseVoice(){
+      const voices = speechSynthesis.getVoices() || [];
       if (!voices.length) return null;
       const exactFemale = voices.find(v => /en-GB/i.test(v.lang) && /female|woman|uk english female/i.test(v.name));
       const anyGB = voices.find(v => /en-GB/i.test(v.lang));
@@ -752,14 +764,35 @@
       osc.stop(start + duration + 0.03);
     }
 
-    async function playSfx(audioEl, fallback){
+    async function primeAudio(audioEl){
+      if (!audioEl) return;
       try{
+        audioEl.volume = 1;
+        audioEl.muted = true;
+        audioEl.currentTime = 0;
+        const p = audioEl.play();
+        if (p && typeof p.then === 'function') {
+          await p.catch(() => {});
+        }
         audioEl.pause();
         audioEl.currentTime = 0;
-        const playPromise = audioEl.play();
-        if (playPromise && typeof playPromise.then === 'function') {
-         async function playSfx(audioEl, fallback){
+        audioEl.muted = false;
+      }catch(err){
+        try{
+          audioEl.muted = false;
+          audioEl.load();
+        }catch(e){}
+      }
+    }
+
+    async function playSfx(audioEl, fallback){
+      if (!audioEl) {
+        if (fallback) await fallback();
+        return;
+      }
       try{
+        audioEl.volume = 1;
+        audioEl.muted = false;
         audioEl.pause();
         audioEl.currentTime = 0;
         await new Promise(async resolve => {
@@ -797,7 +830,55 @@
       }
     }
 
-    async function correctSound(){'info');
+    async function correctSound(){
+      await playSfx(correctAudio, async () => {
+        playTone(660, .18, 'triangle', 0);
+        playTone(880, .22, 'triangle', .16);
+        await wait(430);
+      });
+    }
+
+    async function wrongSound(){
+      await playSfx(wrongAudio, async () => {
+        playTone(360, .22, 'sawtooth', 0);
+        playTone(240, .3, 'sawtooth', .16);
+        await wait(520);
+      });
+    }
+
+    function speak(text){
+      return new Promise(resolve => {
+        if (!audioReady || !('speechSynthesis' in window)) return resolve();
+        speechSynthesis.cancel();
+        chooseVoice();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = (selectedVoice && selectedVoice.lang) || 'en-GB';
+        utter.rate = 0.84;
+        utter.pitch = 1.02;
+        utter.volume = 1;
+        if (selectedVoice) utter.voice = selectedVoice;
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        speechSynthesis.speak(utter);
+      });
+    }
+
+    async function runAudio(task){
+      if (audioLock) return;
+      audioLock = true;
+      disableInteractive(true);
+      try{
+        await task();
+      }finally{
+        audioLock = false;
+        disableInteractive(false);
+        focusActive();
+      }
+    }
+
+    async function readCurrentPrompt(){
+      await runAudio(async () => {
+        setFeedback(phrases[currentIndex], 'info');
         await speak(phrases[currentIndex]);
       });
     }
@@ -926,6 +1007,8 @@
         correctAudio.load();
         wrongAudio.load();
       }catch(err){}
+      await primeAudio(correctAudio);
+      await primeAudio(wrongAudio);
       soundStatus.textContent = 'Sound is on. The phrase will be read before each equation.';
       setFeedback('Sound is ready. Let us begin!', 'info');
       startOverlay.classList.add('hidden');
