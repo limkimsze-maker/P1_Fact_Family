@@ -1,6 +1,8 @@
 <!doctype html>
 <html lang="en">
 <head>
+  <link rel="icon" href="./kimsze_sharp16.ico" sizes="any">
+  <link rel="shortcut icon" href="./kimsze_sharp16.ico">
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Fact Family Streak</title>
@@ -580,6 +582,11 @@
     const partBNode = document.getElementById('partBNode');
     const confettiLayer = document.getElementById('confettiLayer');
 
+    const correctAudio = new Audio('./correct.mp3');
+    const wrongAudio = new Audio('./wrong.mp3');
+    correctAudio.preload = 'auto';
+    wrongAudio.preload = 'auto';
+
     let audioReady = false;
     let audioLock = false;
     let currentIndex = 0;
@@ -757,16 +764,52 @@
       osc.stop(start + duration + 0.03);
     }
 
+    async function playSfx(audioEl, fallback){
+      try{
+        audioEl.pause();
+        audioEl.currentTime = 0;
+        const playPromise = audioEl.play();
+        if (playPromise && typeof playPromise.then === 'function') {
+          await playPromise;
+        }
+        await new Promise(resolve => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            audioEl.removeEventListener('ended', finish);
+            audioEl.removeEventListener('error', fail);
+            resolve();
+          };
+          const fail = async () => {
+            audioEl.removeEventListener('ended', finish);
+            audioEl.removeEventListener('error', fail);
+            if (fallback) await fallback();
+            resolve();
+          };
+          audioEl.addEventListener('ended', finish, { once:true });
+          audioEl.addEventListener('error', fail, { once:true });
+          setTimeout(finish, Math.max(700, ((audioEl.duration || 0) * 1000) + 120));
+        });
+      }catch(err){
+        if (fallback) await fallback();
+      }
+    }
+
     async function correctSound(){
-      playTone(660, .18, 'triangle', 0);
-      playTone(880, .22, 'triangle', .16);
-      return wait(430);
+      await playSfx(correctAudio, async () => {
+        playTone(660, .18, 'triangle', 0);
+        playTone(880, .22, 'triangle', .16);
+        await wait(430);
+      });
     }
 
     async function wrongSound(){
-      playTone(360, .22, 'sawtooth', 0);
-      playTone(240, .3, 'sawtooth', .16);
-      return wait(520);
+      await playSfx(wrongAudio, async () => {
+        playTone(360, .22, 'sawtooth', 0);
+        playTone(240, .3, 'sawtooth', .16);
+        await wait(520);
+      });
     }
 
     function speak(text){
@@ -926,6 +969,10 @@
         }
       }catch(err){}
       chooseVoice();
+      try{
+        correctAudio.load();
+        wrongAudio.load();
+      }catch(err){}
       soundStatus.textContent = 'Sound is on. The phrase will be read before each equation.';
       setFeedback('Sound is ready. Let us begin!', 'info');
       startOverlay.classList.add('hidden');
